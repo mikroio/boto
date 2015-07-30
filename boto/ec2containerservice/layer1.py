@@ -22,13 +22,13 @@
 
 import boto
 from boto.compat import json
-from boto.connection import AWSQueryConnection
+from boto.connection import AWSAuthConnection
 from boto.regioninfo import RegionInfo
 from boto.exception import JSONResponseError
 from boto.ec2containerservice import exceptions
 
 
-class EC2ContainerServiceConnection(AWSQueryConnection):
+class EC2ContainerServiceConnection(AWSAuthConnection):
     """
     Amazon EC2 Container Service (Amazon ECS) is a highly scalable,
     fast, container management service that makes it easy to run,
@@ -91,6 +91,66 @@ class EC2ContainerServiceConnection(AWSQueryConnection):
             params['clusterName'] = cluster_name
         return self._make_request(
             action='CreateCluster',
+            verb='POST',
+            path='/', params=params)
+
+    def create_service(self, service_name, cluster=None, desired_count=None,
+                       load_balancers=None, role=None, task_definition=None):
+        """
+        Runs and maintains a desired number of tasks from a specified task
+        definition. If the number of tasks running in a service drops below
+        `desired_count`, Amazon ECS will spawn another instantiation of the
+        task in the specified cluster.
+
+        :type cluster: string
+        :param cluster: The short name or full Amazon Resource Name (ARN) of
+            the cluster that you want to run your service on. If you do not
+            specify a cluster, the default cluster is assumed.
+
+        :type desired_count: integer
+        :param desired_count: The number of instantiations of the specified
+            task definition that you would like to place and keep running on
+            your cluster.
+
+        :type load_balancers: list of tuples
+        :param load_balancers: A list of load balancer tuples, containing the
+            load balancer name, the container name (as it appears in a
+            container definition), and the container port to access from the
+            load balancer.
+
+        :type role: string
+        :param role: The name or full Amazon Resource Name (ARN) of the IAM
+            role that allows your Amazon ECS container agent to make calls to
+            your load balancer on your behalf. This parameter is only required
+            if you are using a load balancer with your service.
+
+        :type service_name: string
+        :param service_name: The name of your service. Up to 255 letters
+            (uppercase and lowercase), numbers, hyphens, and underscores are
+            allowed.
+
+        :type task_definition: string
+        :param task_definition: The `family` and `revision` (`family:revision`)
+            or full Amazon Resource Name (ARN) of the task definition that you
+            want to run in your service.
+        """
+        params = {}
+        params['serviceName'] = service_name
+        if cluster is not None:
+            params['cluster'] = cluster
+        if desired_count is not None:
+            params['desiredCount'] = desired_count
+        if load_balancers is not None:
+            self.build_complex_list_params(
+                params, load_balancers, 'loadBalancer.member',
+                ('LoadBalancerName', 'ContainerName', 'ContainerPort'))
+        if role is not None:
+            params['role'] = role
+        if task_definition is not None:
+            params['taskDefinition'] = task_definition
+
+        return self._make_request(
+            action='CreateService',
             verb='POST',
             path='/', params=params)
 
@@ -215,6 +275,27 @@ class EC2ContainerServiceConnection(AWSQueryConnection):
             params['cluster'] = cluster
         return self._make_request(
             action='DescribeContainerInstances',
+            verb='POST',
+            path='/', params=params)
+
+    def describe_services(self, cluster, services):
+        """
+        Describes the specified services running in your cluster.
+
+        :type cluster: string
+        :param cluster: The name of the cluster that hosts the service you
+            want to describe.
+
+        :type services: list of str
+        :param services: A list of services you want to describe.
+        """
+        params = {}
+        params["cluster"] = cluster
+        self.build_list_params(params,
+                               services,
+                               'services.member')
+        return self._make_request(
+            action='DescribeServices',
             verb='POST',
             path='/', params=params)
 
@@ -407,8 +488,51 @@ class EC2ContainerServiceConnection(AWSQueryConnection):
             verb='POST',
             path='/', params=params)
 
+    def list_services(self, cluster=None, next_token=None, max_results=None):
+        """
+        Lists the services that are running in a specified cluster.
+
+        :type cluster: string
+        :param cluster: The short name or full Amazon Resource Name (ARN) of
+            the cluster that hosts the services you want to list. If you do not
+            specify a cluster, the default cluster is assumed.
+
+        :type next_token: string
+        :param next_token: The `next_token` value returned from a previous
+            paginated `list_services` request where `max_results` was used and
+            the results exceeded the value of that parameter. Pagination
+            continues from the end of the previous results that returned the
+            `next_token` value. This value is `null` when there are no more
+            results to return.
+
+        :type max_results: integer
+        :param max_results: The maximum number of task results returned by
+            `ListTasks` in paginated output. When this parameter is used,
+            `ListTasks` only returns `maxResults` results in a single page
+            along with a `nextToken` response element. The remaining results of
+            the initial request can be seen by sending another `ListTasks`
+            request with the returned `nextToken` value. This value can be
+            between 1 and 100. If this parameter is not used, then `ListTasks`
+            returns up to 100 results and a `nextToken` value if applicable.
+        :type
+        """
+        params = {}
+        if cluster is not None:
+            params['cluster'] = cluster
+        if next_token is not None:
+            params['nextToken'] = next_token
+        if max_results is not None:
+            params['maxResults'] = max_results
+        return self._make_request(
+            action='ListServices',
+            verb='POST',
+            path='/', params=params)
+
+    def get_result(self, result, action):
+        return result.get(action + 'Response', {}).get(action + 'Result')
+
     def list_tasks(self, cluster=None, container_instance=None, family=None,
-                   next_token=None, max_results=None):
+                   service_name=None, next_token=None, max_results=None):
         """
         Returns a list of tasks for a specified cluster. You can
         filter the results by family name or by a particular container
@@ -430,6 +554,11 @@ class EC2ContainerServiceConnection(AWSQueryConnection):
         :param family: The name of the family that you want to filter the
             `ListTasks` results with. Specifying a `family` will limit the
             results to tasks that belong to that family.
+
+        :type service_name: string
+        :param service_name: The name of the service that you want to filter
+            the `ListTasks` results with. Specifying a `serviceName` will limit
+            the results to tasks that belong to that service.
 
         :type next_token: string
         :param next_token: The `nextToken` value returned from a previous
@@ -457,6 +586,8 @@ class EC2ContainerServiceConnection(AWSQueryConnection):
             params['containerInstance'] = container_instance
         if family is not None:
             params['family'] = family
+        if service_name is not None:
+            params['serviceName'] = service_name
         if next_token is not None:
             params['nextToken'] = next_token
         if max_results is not None:
@@ -510,6 +641,80 @@ class EC2ContainerServiceConnection(AWSQueryConnection):
             verb='POST',
             path='/', params=params)
 
+    def build_complex_object_params(self, params, items, label):
+        """Serialize a list of structures.
+
+        For example::
+
+            items = [('foo', 'bar', 'baz'), ('foo2', 'bar2', 'baz2')]
+            label = 'ParamName.member'
+            names = ('One', 'Two', 'Three')
+            self.build_complex_list_params(params, items, label, names)
+
+        would result in the params dict being updated with these params::
+
+            ParamName.member.1.One = foo
+            ParamName.member.1.Two = bar
+            ParamName.member.1.Three = baz
+
+            ParamName.member.2.One = foo2
+            ParamName.member.2.Two = bar2
+            ParamName.member.2.Three = baz2
+
+        :type params: dict
+        :param params: The params dict.  The complex list params
+            will be added to this dict.
+
+        :type items: list of tuples
+        :param items: The list to serialize.
+
+        :type label: string
+        :param label: The prefix to apply to the parameter.
+
+        :type names: tuple of strings
+        :param names: The names associated with each tuple element.
+
+        """
+        def handle_item(label, item):
+            for key, value in item.items():
+                full_key = '%s.%s' % (label, key)
+                if type(value) == list:
+                    handle_list(full_key, value)
+                elif value in (True, False):
+                    params[full_key] = json.dumps(value)
+                else:
+                    params[full_key] = value
+
+        def handle(label, item):
+            if type(item) == list:
+                _handle_list(label, item)
+                return True
+            elif type(item) == dict:
+                _handle_dict(label, item)
+
+        def _handle_list(label, items):
+            for i, item in enumerate(items, 1):
+                current_prefix = '%s.member.%s' % (label, i)
+                handle(current_prefix, item)
+                if type(item) == list:
+                    _handle_list(current_prefix, item)
+                elif type(item) == dict:
+                    _handle_dict(current_prefix, item)
+                else:
+                    params[current_prefix] = item
+
+        def _handle_dict(label, item):
+            for key, value in item.items():
+                full_key = '%s.%s' % (label, key)
+                if type(value) == list:
+                    _handle_list(full_key, value)
+                elif value in (True, False):
+                    params[full_key] = json.dumps(value)
+                else:
+                    params[full_key] = value
+
+        _handle_list(label, items)
+
     def register_task_definition(self, family, container_definitions):
         """
         Registers a new task definition from the supplied `family` and
@@ -527,10 +732,9 @@ class EC2ContainerServiceConnection(AWSQueryConnection):
 
         """
         params = {'family': family, }
-        self.build_complex_list_params(
+        self.build_complex_object_params(
             params, container_definitions,
-            'containerDefinitions.member',
-            ('name', 'image', 'cpu', 'memory', 'links', 'portMappings', 'essential', 'entryPoint', 'command', 'environment'))
+            'containerDefinitions')
         return self._make_request(
             action='RegisterTaskDefinition',
             verb='POST',
@@ -732,6 +936,60 @@ class EC2ContainerServiceConnection(AWSQueryConnection):
             verb='POST',
             path='/', params=params)
 
+    def update_service(self, cluster=None, desired_count=None,
+                       service=None, task_definition=None):
+        """
+        Modify the desired count or task definition used in a service.
+
+        You can add to or subtract from the number of instantiations of a task
+        definition in a service by specifying the cluster that the service is
+        running in and a new `desired_count` parameter.
+
+        You can use `update_service` to modify your task definition and deploy
+        a new version of your service, one task at a time. If you modify the
+        task definition with `update_service`, Amazon ECS spawns a task with
+        the new version of the task definition and then stops an old task after
+        the new version is running. Because `update_service` starts a new
+        version of the task before stopping an old version, your cluster must
+        have capacity to support one more instantiation of the task when
+        `update_service` is run. If your cluster cannot support another
+        instantiation of the task used in your service, you can reduce the
+        desired count of your service by one before modifying the task
+        definition.
+
+        :type cluster: string
+        :param cluster: The short name or full Amazon Resource Name (ARN) of
+            the cluster that you want to run your service on. If you do not
+            specify a cluster, the default cluster is assumed.
+
+        :type desired_count: integer
+        :param desired_count: The number of instantiations of the specified
+            task definition that you would like to place and keep running on
+            your cluster.
+
+        :type service: string
+        :param service: The name of the service that you want to update.
+
+        :type task_definition: string
+        :param task_definition: The `family` and `revision` (`family:revision`)
+            or full Amazon Resource Name (ARN) of the task definition that you
+            want to run in your service.
+        """
+        params = {}
+        if service is not None:
+            params['service'] = service
+        if cluster is not None:
+            params['cluster'] = cluster
+        if desired_count is not None:
+            params['desiredCount'] = desired_count
+        if task_definition is not None:
+            params['taskDefinition'] = task_definition
+
+        return self._make_request(
+            action='UpdateService',
+            verb='POST',
+            path='/', params=params)
+
     def _make_request(self, action, verb, path, params):
         params['ContentType'] = 'JSON'
         response = self.make_request(action=action, verb='POST',
@@ -739,7 +997,8 @@ class EC2ContainerServiceConnection(AWSQueryConnection):
         body = response.read().decode('utf-8')
         boto.log.debug(body)
         if response.status == 200:
-            return json.loads(body)
+            body = json.loads(body)
+            return body.get(action + 'Response', {}).get(action + 'Result', None)
         else:
             json_body = json.loads(body)
             fault_name = json_body.get('Error', {}).get('Code', None)
